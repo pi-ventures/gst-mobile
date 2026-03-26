@@ -77,6 +77,10 @@ async def lookup_gstin(page, gstin):
                             return val
                         return idx
 
+                    hsn_raw = resolve(item.get("hsn", []))
+                    hsn_codes = hsn_raw if isinstance(hsn_raw, list) else []
+                    hsn_str = ", ".join(str(h) for h in hsn_codes if h)
+
                     return {
                         "gstin": gstin,
                         "trade_name": resolve(item.get("tradeName", "")),
@@ -87,6 +91,8 @@ async def lookup_gstin(page, gstin):
                         "address": resolve(item.get("adr", "")),
                         "pincode": resolve(item.get("pincode", "")),
                         "state": STATE_NAMES.get(gstin[:2], gstin[:2]),
+                        "hsn_codes": hsn_str,
+                        "dealer_type": resolve(item.get("dty", "")),
                     }
         return None
     except Exception:
@@ -96,8 +102,8 @@ async def lookup_gstin(page, gstin):
 async def discover_by_pan(page, pan):
     """Try all state codes for a PAN to find all GSTINs nationwide."""
     print(f"\nDiscovering all GSTINs for PAN: {pan}")
-    print(f"{'GSTIN':<20} {'State':<20} {'Phone':<14} {'Status':<12} {'Trade Name'}")
-    print("-" * 110)
+    print(f"{'GSTIN':<20} {'State':<20} {'Phone':<14} {'Status':<12} {'Trade Name':<40} {'HSN Codes'}")
+    print("-" * 160)
 
     results = []
     for sc in STATE_CODES:
@@ -109,12 +115,12 @@ async def discover_by_pan(page, pan):
                 if data and data.get("legal_name"):
                     phone = str(data.get("phone") or "-")
                     status = str(data.get("status") or "-")
-                    trade = str(data.get("trade_name") or "-")
-                    print(f"{gstin:<20} {data['state']:<20} {phone:<14} {status:<12} {trade}")
+                    trade = str(data.get("trade_name") or "-")[:40]
+                    hsn = str(data.get("hsn_codes") or "-")
+                    print(f"{gstin:<20} {data['state']:<20} {phone:<14} {status:<12} {trade:<40} {hsn}")
                     results.append(data)
-                    # Try next digit suffix for same state
                 else:
-                    break  # no more suffixes for this digit in this state
+                    break
     return results
 
 
@@ -129,17 +135,18 @@ async def run(gstins, output_file=None, pan=None):
         if pan:
             results = await discover_by_pan(page, pan)
         else:
-            print(f"{'GSTIN':<20} {'State':<20} {'Phone':<14} {'Status':<12} {'Trade Name':<45} {'Legal Name'}")
-            print("-" * 150)
+            print(f"{'GSTIN':<20} {'State':<20} {'Phone':<14} {'Status':<12} {'Trade Name':<40} {'HSN Codes':<40} {'Legal Name'}")
+            print("-" * 180)
 
             for gstin in gstins:
                 data = await lookup_gstin(page, gstin)
                 if data:
                     phone = str(data.get("phone") or "-")
                     status = str(data.get("status") or "-")
-                    trade = str(data.get("trade_name") or "-")[:45]
+                    trade = str(data.get("trade_name") or "-")[:40]
                     legal = str(data.get("legal_name") or "-")
-                    print(f"{gstin:<20} {data['state']:<20} {phone:<14} {status:<12} {trade:<45} {legal}")
+                    hsn = str(data.get("hsn_codes") or "-")[:40]
+                    print(f"{gstin:<20} {data['state']:<20} {phone:<14} {status:<12} {trade:<40} {hsn:<40} {legal}")
                     results.append(data)
                 else:
                     print(f"{gstin:<20} {'?':<20} {'-':<14} {'NOT FOUND':<12}")
@@ -150,7 +157,7 @@ async def run(gstins, output_file=None, pan=None):
         if output_file and results:
             with open(output_file, "w", newline="", encoding="utf-8") as f:
                 fields = ["gstin", "state", "phone", "trade_name", "legal_name",
-                          "email", "status", "address", "pincode"]
+                          "hsn_codes", "dealer_type", "email", "status", "address", "pincode"]
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(results)
