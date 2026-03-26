@@ -49,6 +49,22 @@ STATE_NAMES = {
 }
 
 
+def _gstin_check_digit(partial_14):
+    """Calculate GSTIN check digit (15th character) for a 14-char partial GSTIN.
+    Uses the standard GSTIN check digit algorithm (Luhn mod 36 variant).
+    """
+    char_map = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    total = 0
+    for i, ch in enumerate(partial_14):
+        val = char_map.index(ch.upper())
+        factor = (2 if (i + 1) % 2 == 0 else 1)
+        product = val * factor
+        total += (product // 36) + (product % 36)
+    remainder = total % 36
+    check_val = (36 - remainder) % 36
+    return char_map[check_val]
+
+
 async def lookup_gstin(page, gstin):
     """Fetch mobile number for a single GSTIN from Jamku."""
     try:
@@ -100,27 +116,55 @@ async def lookup_gstin(page, gstin):
 
 
 async def discover_by_pan(page, pan):
-    """Try all state codes for a PAN to find all GSTINs nationwide."""
+    """Try all state codes for a PAN to find all GSTINs nationwide.
+
+    GSTIN format: {2-digit state}{10-char PAN}{1 digit}{Z}{1 check char}
+    The 13th char is entity number (1-9), 14th is always Z,
+    15th is a check digit (0-9 or A-Z). We try all common combos.
+    """
     print(f"\nDiscovering all GSTINs for PAN: {pan}")
     print(f"{'GSTIN':<20} {'State':<20} {'Phone':<14} {'Status':<12} {'Trade Name':<40} {'HSN Codes'}")
     print("-" * 160)
 
-    results = []
+    # Generate valid GSTINs using check digit algorithm
+    # Only 1 valid check digit per state+entity combo = 36 states × 9 entities = 324 checks max
+    suffixes_by_state = {}
     for sc in STATE_CODES:
-        # Try common suffixes: 1Z0-1Z9, 2Z0-2Z9, etc.
-        for digit in "123456789":
-            for last in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                gstin = f"{sc}{pan}{digit}Z{last}"
-                data = await lookup_gstin(page, gstin)
-                if data and data.get("legal_name"):
-                    phone = str(data.get("phone") or "-")
-                    status = str(data.get("status") or "-")
-                    trade = str(data.get("trade_name") or "-")[:40]
-                    hsn = str(data.get("hsn_codes") or "-")
-                    print(f"{gstin:<20} {data['state']:<20} {phone:<14} {status:<12} {trade:<40} {hsn}")
-                    results.append(data)
-                else:
-                    break
+        state_suffixes = []
+        for entity in "123456789":
+            partial = f"{sc}{pan}{entity}Z"
+            check = _gstin_check_digit(partial)
+            state_suffixes.append(f"{entity}Z{check}")
+        suffixes_by_state[sc] = state_suffixes
+
+    results = []
+    total_checks = len(STATE_CODES) * 9  # 9 entity numbers per state
+    checked = 0
+
+    for sc in STATE_CODES:
+        state_name = STATE_NAMES.get(sc, sc)
+        found_in_state = 0
+        for suffix in suffixes_by_state[sc]:
+            gstin = f"{sc}{pan}{suffix}"
+            checked += 1
+            data = await lookup_gstin(page, gstin)
+            if data and data.get("legal_name"):
+                phone = str(data.get("phone") or "-")
+                status = str(data.get("status") or "-")
+                trade = str(data.get("trade_name") or "-")[:40]
+                hsn = str(data.get("hsn_codes") or "-")
+                print(f"{gstin:<20} {state_name:<20} {phone:<14} {status:<12} {trade:<40} {hsn}")
+                results.append(data)
+                found_in_state += 1
+
+        if found_in_state > 0:
+            print(f"  [{state_name}: {found_in_state} registrations]")
+        # Progress update per state
+        sys.stderr.write(f"\r  Checked {state_name}... ({checked}/{total_checks}) Found: {len(results)}    ")
+        sys.stderr.flush()
+
+    sys.stderr.write("\r" + " " * 80 + "\r")
+    print(f"\nTotal: {len(results)} GSTINs discovered for PAN {pan}")
     return results
 
 
